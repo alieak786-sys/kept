@@ -1,4 +1,3 @@
-
 import { checkServerHealth } from './api.js'
 import {
   AudioInputSource,
@@ -14,17 +13,38 @@ const SWIPE_DOWN = 2
 const LONG_PRESS = 10
 
 const API_URL = 'http://localhost:3000/api/audio'
-
+const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
 // 16 kHz x 2 bytes x 10 seconds
 const AUDIO_CHUNK_BYTES = 320000
 const AUDIO_BYTES_PER_SECOND = 32000
 
 const SCREENS = {
-  idle: 'Kept\n\nTap to start meeting\nDouble tap to exit',
-  listening: '* Listening',
-  card: 'Send report to Ali\nDue: Friday\n\nTap = add\nSwipe down = skip',
-  saved: 'Saved\nNotion + Calendar',
+  saved: 'Added\n(demo: not saved yet)',
   paused: 'Paused\n\nSwipe up: resume\nHold: end meeting',
+}
+
+function capitalise(text) {
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+// "2026-11-27" -> "Fri 27 Nov"
+function formatDue(due) {
+  if (!due) return 'No date'
+  const date = new Date(`${due}T12:00:00`)
+  if (Number.isNaN(date.getTime())) return due
+  return date.toLocaleDateString('en-GB', {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  })
+}
+
+function cardText(card) {
+  return `! Promise caught\n${capitalise(card.task).slice(0, 60)}\nDue: ${formatDue(card.due)}\n\nTap = add\nSwipe down = skip`
+}
+
+function cardKey(card) {
+  return `${card.task}|${card.person}|${card.due}`.toLowerCase()
 }
 
 async function main() {
@@ -43,10 +63,16 @@ async function main() {
   let audioBufferOffset = 0
   let uploadedChunkCount = 0
   let uploadStatus = 'Waiting'
+  let lastHeard = ''
+  let lastPromises = 0
 
   // Keep uploads in order
   let uploadQueue = Promise.resolve()
 
+  // Promise cards
+  let currentCard = null
+  let pendingCards = []
+  const seenKeys = new Map() // promise key -> time it was shown
   function getScreenContent(screen) {
     if (screen === 'idle') {
       return `Kept\n\nServer: ${serverStatus}\nTap to start meeting\nDouble tap to exit`
@@ -57,7 +83,10 @@ async function main() {
         audioBufferOffset / AUDIO_BYTES_PER_SECOND
       ).toFixed(1)
 
-      return `* Listening\nMic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus}\nBuffer: ${bufferedSeconds}s / 10s\nTap: check last 30 s\nSwipe up: pause`
+      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\nHeard: ${lastHeard || '-'}\nPromises: ${lastPromises}\nSwipe up: pause\nHold: end meeting`    }
+
+    if (screen === 'card') {
+      return currentCard ? cardText(currentCard) : 'No card'
     }
 
     return SCREENS[screen]
@@ -98,6 +127,43 @@ async function main() {
     )
   }
 
+  // ---- Promise cards ----
+
+  function showNextCard() {
+    currentCard = pendingCards.shift() || null
+    show(currentCard ? 'card' : 'listening')
+  }
+
+  function enqueueCards(list) {
+    // Cards only matter while a meeting is running
+    if (state !== 'listening' && state !== 'card' && state !== 'saved') return
+
+    for (const card of list) {
+           const key = cardKey(card)
+      const lastSeen = seenKeys.get(key)
+      if (lastSeen && Date.now() - lastSeen < DUPLICATE_WINDOW_MS) continue
+      seenKeys.set(key, Date.now())
+      pendingCards.push(card)
+    }
+
+    if (state === 'listening' && pendingCards.length > 0) {
+      showNextCard()
+    }
+  }
+
+  function clearCards() {
+    currentCard = null
+    pendingCards = []
+    seenKeys.clear()
+  }
+
+  // Later (Day 5) this will create the Notion task and Calendar event
+  function approveCard(card) {
+    console.log('Approved card (not saved yet):', card)
+  }
+
+  // ---- Audio ----
+
   // Discard incomplete audio when capture stops
   function resetAudioBuffer() {
     audioBuffer = new Uint8Array(AUDIO_CHUNK_BYTES)
@@ -123,14 +189,23 @@ async function main() {
 
       uploadedChunkCount++
       uploadStatus = 'OK'
+      lastHeard = (data.text || '').slice(0, 24)
+      lastPromises = data.commitments?.length ?? 0
 
       console.log(
         'Uploaded audio chunk:',
         uploadedChunkCount,
         'Received bytes:',
-        data.receivedBytes,
+        data.received,
+        'Promises:',
+        data.commitments?.length ?? 0,
       )
 
+      if (Array.isArray(data.commitments) && data.commitments.length > 0) {
+        enqueueCards(data.commitments)
+      }
+
+      // Refresh the counters if we are still on the listening screen
       if (state === 'listening') {
         show('listening')
       }
@@ -222,6 +297,12 @@ async function main() {
     }
   }
 
+  async function endMeeting() {
+    await stopMicrophone()
+    clearCards()
+    show('idle')
+  }
+
   function eventTypeOf(envelope) {
     if (!envelope) return null
     return envelope.eventType ?? OsEventTypeList.CLICK_EVENT
@@ -280,29 +361,30 @@ async function main() {
         await startMicrophone()
       }
     } else if (state === 'listening') {
-      if (isClick) {
-        show('card')
-      } else if (isUp) {
+      if (isUp) {
         show('paused')
         await stopMicrophone()
       } else if (isLong) {
-        await stopMicrophone()
-        show('idle')
+        await endMeeting()
       }
     } else if (state === 'card') {
       if (isClick) {
+        approveCard(currentCard)
         show('saved')
-        setTimeout(() => show('listening'), 2000)
+        setTimeout(() => {
+          if (state === 'saved') showNextCard()
+        }, 1500)
       } else if (isDown) {
-        show('listening')
+        showNextCard()
+      } else if (isLong) {
+        await endMeeting()
       }
     } else if (state === 'paused') {
       if (isUp) {
         show('listening')
         await startMicrophone()
       } else if (isLong) {
-        await stopMicrophone()
-        show('idle')
+        await endMeeting()
       }
     }
   })
