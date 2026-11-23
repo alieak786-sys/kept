@@ -1,60 +1,103 @@
-import './style.css'
-import heroImg from './assets/hero.png'
-import javascriptLogo from './assets/javascript.svg'
-import viteLogo from './assets/vite.svg'
-import { setupCounter } from './counter.js'
+import {
+  waitForEvenAppBridge,
+  TextContainerProperty,
+  CreateStartUpPageContainer,
+  TextContainerUpgrade,
+  OsEventTypeList,
+} from '@evenrealities/even_hub_sdk'
 
-document.querySelector('#app').innerHTML = `
-<section id="center">
-  <div class="hero">
-    <img src="${heroImg}" class="base" width="170" height="179">
-    <img src="${javascriptLogo}" class="framework" alt="JavaScript logo"/>
-    <img src="${viteLogo}" class="vite" alt="Vite logo" />
-  </div>
-  <div>
-    <h1>Get started</h1>
-    <p>Edit <code>src/main.js</code> and save to test <code>HMR</code></p>
-  </div>
-  <button id="counter" type="button" class="counter"></button>
-</section>
+// Gesture numbers we measured in the simulator
+const SWIPE_UP = 1 // arrives in event.textEvent
+const SWIPE_DOWN = 2 // arrives in event.textEvent
+const LONG_PRESS = 10 // arrives in event.sysEvent
 
-<div class="ticks"></div>
+// What each screen shows (max about 3-5 short lines)
+const SCREENS = {
+  idle: 'Kept\n\nTap to start meeting\nDouble tap to exit',
+  listening: '* Listening\n\nTap: check last 30 s\nSwipe up: pause\nHold: end meeting',
+  card: 'Send report to Ali\nDue: Friday\n\nTap = add\nSwipe down = skip',
+  saved: 'Saved\nNotion + Calendar',
+  paused: 'Paused\n\nSwipe up: resume\nHold: end meeting',
+}
 
-<section id="next-steps">
-  <div id="docs">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#documentation-icon"></use></svg>
-    <h2>Documentation</h2>
-    <p>Your questions, answered</p>
-    <ul>
-      <li>
-        <a href="https://vite.dev/" target="_blank">
-          <img class="logo" src="${viteLogo}" alt="" />
-          Explore Vite
-        </a>
-      </li>
-      <li>
-        <a href="https://developer.mozilla.org/en-US/docs/Web/JavaScript" target="_blank">
-          <img class="button-icon" src="${javascriptLogo}" alt="">
-          Learn more
-        </a>
-      </li>
-    </ul>
-  </div>
-  <div id="social">
-    <svg class="icon" role="presentation" aria-hidden="true"><use href="/icons.svg#social-icon"></use></svg>
-    <h2>Connect with us</h2>
-    <p>Join the Vite community</p>
-    <ul>
-      <li><a href="https://github.com/vitejs/vite" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#github-icon"></use></svg>GitHub</a></li>
-      <li><a href="https://chat.vite.dev/" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#discord-icon"></use></svg>Discord</a></li>
-      <li><a href="https://x.com/vite_js" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#x-icon"></use></svg>X.com</a></li>
-      <li><a href="https://bsky.app/profile/vite.dev" target="_blank"><svg class="button-icon" role="presentation" aria-hidden="true"><use href="/icons.svg#bluesky-icon"></use></svg>Bluesky</a></li>
-    </ul>
-  </div>
-</section>
+async function main() {
+  const bridge = await waitForEvenAppBridge()
+  let state = 'idle'
 
-<div class="ticks"></div>
-<section id="spacer"></section>
-`
+  const mainText = new TextContainerProperty({
+    xPosition: 0,
+    yPosition: 0,
+    width: 576,
+    height: 288,
+    borderWidth: 0,
+    borderColor: 5,
+    paddingLength: 4,
+    containerID: 1,
+    containerName: 'main',
+    content: SCREENS.idle,
+    isEventCapture: 1,
+  })
 
-setupCounter(document.querySelector('#counter'))
+  const result = await bridge.createStartUpPageContainer(
+    new CreateStartUpPageContainer({
+      containerTotalNum: 1,
+      textObject: [mainText],
+    }),
+  )
+  console.log('Page created:', result === 0 ? 'success' : `failed (${result})`)
+
+  function show(newState) {
+    state = newState
+    bridge.textContainerUpgrade(
+      new TextContainerUpgrade({
+        containerID: 1,
+        containerName: 'main',
+        content: SCREENS[newState],
+      }),
+    )
+  }
+
+  // A tap arrives as eventType undefined, so we treat "undefined" as CLICK.
+  function eventTypeOf(envelope) {
+    if (!envelope) return null
+    return envelope.eventType ?? OsEventTypeList.CLICK_EVENT
+  }
+
+  bridge.onEvenHubEvent((event) => {
+    const sys = eventTypeOf(event.sysEvent)
+    const text = eventTypeOf(event.textEvent)
+
+    // Double tap always exits the app (platform rule)
+    if (sys === OsEventTypeList.DOUBLE_CLICK_EVENT || text === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+      bridge.shutDownPageContainer(1)
+      return
+    }
+
+    const isClick = sys === OsEventTypeList.CLICK_EVENT || text === OsEventTypeList.CLICK_EVENT
+    const isUp = text === SWIPE_UP
+    const isDown = text === SWIPE_DOWN
+    const isLong = sys === LONG_PRESS
+
+    if (state === 'saved') return // ignore gestures while "Saved" is showing
+
+    if (state === 'idle') {
+      if (isClick) show('listening')
+    } else if (state === 'listening') {
+      if (isClick) show('card') // later: real "check last 30 s"
+      else if (isUp) show('paused')
+      else if (isLong) show('idle')
+    } else if (state === 'card') {
+      if (isClick) {
+        show('saved')
+        setTimeout(() => show('listening'), 2000)
+      } else if (isDown) {
+        show('listening')
+      }
+    } else if (state === 'paused') {
+      if (isUp) show('listening')
+      else if (isLong) show('idle')
+    }
+  })
+}
+
+main()
