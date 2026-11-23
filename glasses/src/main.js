@@ -1,3 +1,5 @@
+
+import { checkServerHealth } from './api.js'
 import {
   waitForEvenAppBridge,
   TextContainerProperty,
@@ -24,6 +26,18 @@ async function main() {
   const bridge = await waitForEvenAppBridge()
   let state = 'idle'
 
+  // Backend connection status
+  let serverStatus = 'Checking...'
+
+  // Dynamically display server status on the idle screen
+  function getScreenContent(screen) {
+    if (screen === 'idle') {
+      return `Kept\n\nServer: ${serverStatus}\nTap to start meeting\nDouble tap to exit`
+    }
+
+    return SCREENS[screen]
+  }
+
   const mainText = new TextContainerProperty({
     xPosition: 0,
     yPosition: 0,
@@ -34,7 +48,7 @@ async function main() {
     paddingLength: 4,
     containerID: 1,
     containerName: 'main',
-    content: SCREENS.idle,
+    content: getScreenContent('idle'),
     isEventCapture: 1,
   })
 
@@ -44,15 +58,17 @@ async function main() {
       textObject: [mainText],
     }),
   )
+
   console.log('Page created:', result === 0 ? 'success' : `failed (${result})`)
 
   function show(newState) {
     state = newState
+
     bridge.textContainerUpgrade(
       new TextContainerUpgrade({
         containerID: 1,
         containerName: 'main',
-        content: SCREENS[newState],
+        content: getScreenContent(newState),
       }),
     )
   }
@@ -68,7 +84,10 @@ async function main() {
     const text = eventTypeOf(event.textEvent)
 
     // Double tap always exits the app (platform rule)
-    if (sys === OsEventTypeList.DOUBLE_CLICK_EVENT || text === OsEventTypeList.DOUBLE_CLICK_EVENT) {
+    if (
+      sys === OsEventTypeList.DOUBLE_CLICK_EVENT ||
+      text === OsEventTypeList.DOUBLE_CLICK_EVENT
+    ) {
       bridge.shutDownPageContainer(1)
       return
     }
@@ -96,6 +115,16 @@ async function main() {
     } else if (state === 'paused') {
       if (isUp) show('listening')
       else if (isLong) show('idle')
+    }
+  })
+
+  // Check backend connection after the glasses page is initialized
+  checkServerHealth().then((isOnline) => {
+    serverStatus = isOnline ? 'OK' : 'Offline'
+
+    // Update the glasses only if they are still on the idle screen
+    if (state === 'idle') {
+      show('idle')
     }
   })
 }
