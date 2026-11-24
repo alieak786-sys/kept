@@ -2,7 +2,7 @@ import express from 'express'
 import cors from 'cors'
 import { transcribe, isSilent } from './stt.js'
 import { extractCommitments } from './extract.js'
-
+import { createNotionTask } from './notion.js'
 const app = express()
 
 app.use(cors())
@@ -12,6 +12,28 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'kept', time: new Date().toISOString() })
 })
 
+
+// Called when the user taps "add" on a promise card
+app.post('/api/cards/approve', async (req, res) => {
+  const { task, person, due } = req.body || {}
+
+  if (typeof task !== 'string' || !task.trim()) {
+    return res.status(400).json({ ok: false, error: 'Task is required' })
+  }
+
+  try {
+    const page = await createNotionTask({
+      task: task.trim().slice(0, 200),
+      person: typeof person === 'string' ? person : null,
+      due: /^\d{4}-\d{2}-\d{2}$/.test(due || '') ? due : null,
+    })
+    console.log('Notion task created:', page.url)
+    res.json({ ok: true, url: page.url })
+  } catch (err) {
+    console.error(err.message)
+    res.status(502).json({ ok: false, error: 'Notion save failed' })
+  }
+})
 // Raw 16 kHz mono 16-bit PCM, about 10 seconds per chunk
 app.post(
   '/api/audio',

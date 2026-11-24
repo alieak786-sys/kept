@@ -13,13 +13,13 @@ const SWIPE_DOWN = 2
 const LONG_PRESS = 10
 
 const API_URL = 'http://localhost:3000/api/audio'
+const APPROVE_URL = 'http://localhost:3000/api/cards/approve'
 const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
 // 16 kHz x 2 bytes x 10 seconds
 const AUDIO_CHUNK_BYTES = 320000
 const AUDIO_BYTES_PER_SECOND = 32000
 
 const SCREENS = {
-  saved: 'Added\n(demo: not saved yet)',
   paused: 'Paused\n\nSwipe up: resume\nHold: end meeting',
 }
 
@@ -72,6 +72,7 @@ async function main() {
   // Promise cards
   let currentCard = null
   let pendingCards = []
+  let saveMessage = ''
   const seenKeys = new Map() // promise key -> time it was shown
   function getScreenContent(screen) {
     if (screen === 'idle') {
@@ -88,7 +89,9 @@ async function main() {
     if (screen === 'card') {
       return currentCard ? cardText(currentCard) : 'No card'
     }
-
+    if (screen === 'saved') {
+      return saveMessage
+    }
     return SCREENS[screen]
   }
 
@@ -158,8 +161,28 @@ async function main() {
   }
 
   // Later (Day 5) this will create the Notion task and Calendar event
-  function approveCard(card) {
-    console.log('Approved card (not saved yet):', card)
+    async function approveCard(card) {
+    saveMessage = 'Saving...\nNotion'
+    show('saved')
+
+    try {
+      const response = await fetch(APPROVE_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(card),
+      })
+      const data = await response.json()
+      if (!response.ok || !data.ok) throw new Error(`HTTP ${response.status}`)
+      saveMessage = 'Saved\nNotion'
+    } catch (error) {
+      console.error('Save failed:', error)
+      saveMessage = 'Save failed\nCheck server'
+    }
+
+    if (state === 'saved') show('saved')
+    setTimeout(() => {
+      if (state === 'saved') showNextCard()
+    }, 1500)
   }
 
   // ---- Audio ----
@@ -368,12 +391,8 @@ async function main() {
         await endMeeting()
       }
     } else if (state === 'card') {
-      if (isClick) {
-        approveCard(currentCard)
-        show('saved')
-        setTimeout(() => {
-          if (state === 'saved') showNextCard()
-        }, 1500)
+         if (isClick) {
+        await approveCard(currentCard)
       } else if (isDown) {
         showNextCard()
       } else if (isLong) {
