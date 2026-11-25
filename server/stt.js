@@ -73,6 +73,42 @@ function isPromptEcho(text) {
   return hits / words.length >= 0.8
 }
 
+// Calls Groq, retrying on network errors, rate limits (429) and server errors (5xx)
+async function postToGroq(form) {
+  const attempts = 3
+  let lastError
+
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    try {
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+        body: form,
+        signal: AbortSignal.timeout(20000),
+      })
+      if (res.ok) return await res.json()
+
+      const body = await res.text()
+      const error = new Error(`Groq error ${res.status}: ${body}`)
+      // Wrong key / bad request will not get better by retrying
+      if (res.status !== 429 && res.status < 500) {
+        error.noRetry = true
+        throw error
+      }
+      lastError = error
+    } catch (err) {
+      if (err.noRetry) throw err
+      lastError = err
+    }
+
+    if (attempt < attempts) {
+      console.log(`Groq attempt ${attempt} failed (${lastError.message}), retrying...`)
+      await new Promise((resolve) => setTimeout(resolve, 700 * attempt))
+    }
+  }
+  throw lastError
+}
+
 export async function transcribe(pcm) {
   const form = new FormData()
   form.append('file', new Blob([pcmToWav(pcm)], { type: 'audio/wav' }), 'chunk.wav')
@@ -82,13 +118,7 @@ export async function transcribe(pcm) {
   form.append('response_format', 'verbose_json')
   form.append('temperature', '0')
 
-  const res = await fetch(GROQ_URL, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${process.env.GROQ_API_KEY}` },
-    body: form,
-  })
-  if (!res.ok) throw new Error(`Groq error ${res.status}: ${await res.text()}`)
-  const data = await res.json()
+    const data = await postToGroq(form)
 
   let text
   if (Array.isArray(data.segments)) {
