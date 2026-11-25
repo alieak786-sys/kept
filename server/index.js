@@ -9,6 +9,7 @@ import {
 } from './google.js'
 import { randomBytes } from 'node:crypto'
 import { saveGoogleTokens, loadGoogleTokens } from './store.js'
+import { ensureIndexes, isValidDeviceId, startPairing, getPairedUserId } from './pairing.js'
 const app = express()
 
 // OAuth "state" values live in memory for 10 minutes (fine to lose on restart).
@@ -24,7 +25,34 @@ app.get('/api/health', (req, res) => {
   res.json({ ok: true, app: 'kept', time: new Date().toISOString() })
 })
 
+// The glasses ask for a pairing code to show on screen
+app.post('/api/pair/start', async (req, res) => {
+  const { deviceId } = req.body || {}
+  if (!isValidDeviceId(deviceId)) {
+    return res.status(400).json({ ok: false, error: 'Invalid device id' })
+  }
+  try {
+    const result = await startPairing(deviceId)
+    res.json({ ok: true, ...result })
+  } catch (err) {
+    console.error('Pair start failed:', err.message)
+    res.status(500).json({ ok: false, error: 'Could not start pairing' })
+  }
+})
 
+// The glasses ask whether the user has finished pairing
+app.get('/api/pair/status', async (req, res) => {
+  const { deviceId } = req.query
+  if (!isValidDeviceId(deviceId)) {
+    return res.status(400).json({ ok: false, error: 'Invalid device id' })
+  }
+  try {
+    res.json({ ok: true, paired: Boolean(await getPairedUserId(deviceId)) })
+  } catch (err) {
+    console.error('Pair status failed:', err.message)
+    res.status(500).json({ ok: false, error: 'Could not check pairing' })
+  }
+})
 // Called when the user taps "add" on a promise card
 app.post('/api/cards/approve', async (req, res) => {
   const { task, person, due } = req.body || {}
@@ -233,6 +261,8 @@ app.post(
     }
   },
 )
+
+ensureIndexes().catch((err) => console.error('Index setup failed:', err.message))
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
