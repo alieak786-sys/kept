@@ -177,12 +177,11 @@ async function main() {
       const response = await fetch(APPROVE_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(card),
-      })
+        body: JSON.stringify({ ...card, deviceId }),
+            })
       const data = await response.json()
       if (!response.ok || !data.ok) throw new Error(`HTTP ${response.status}`)
-      saveMessage = 'Saved\nNotion'
-    } catch (error) {
+      saveMessage = data.calendar?.created ? 'Saved\nNotion + Calendar' : 'Saved\nNotion only'    } catch (error) {
       console.error('Save failed:', error)
       saveMessage = 'Save failed\nCheck server'
     }

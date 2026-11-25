@@ -110,8 +110,7 @@ app.get('/pair/connect', async (req, res) => {
 
 // Called when the user taps "add" on a promise card
 app.post('/api/cards/approve', async (req, res) => {
-  const { task, person, due } = req.body || {}
-
+  const { task, person, due, deviceId } = req.body || {}
   if (typeof task !== 'string' || !task.trim()) {
     return res.status(400).json({
       ok: false,
@@ -147,10 +146,14 @@ app.post('/api/cards/approve', async (req, res) => {
     }
 
         if (cleanDue) {
-      const googleTokens = await loadGoogleTokens(DEMO_USER_ID).catch((err) => {
+      // Find the user these glasses are paired with, then that user's Google tokens
+      let googleTokens = null
+      try {
+        const userId = isValidDeviceId(deviceId) ? await getPairedUserId(deviceId) : null
+        if (userId) googleTokens = await loadGoogleTokens(userId)
+      } catch (err) {
         console.error('Token load failed:', err.message)
-        return null
-      })
+      }
       if (!googleTokens?.refresh_token) {
         calendar.status = 'not_connected'
         console.log('Calendar event skipped: Google not connected')
