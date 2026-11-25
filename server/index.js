@@ -8,14 +8,14 @@ import {
   createCalendarDeadline,
 } from './google.js'
 import { randomBytes } from 'node:crypto'
-
+import { saveGoogleTokens, loadGoogleTokens } from './store.js'
 const app = express()
 
-// Temporary OAuth storage for local testing.
-// Persistent token storage will be added with MongoDB.
+// OAuth "state" values live in memory for 10 minutes (fine to lose on restart).
 const googleOAuthStates = new Map()
-let googleTokens = null
 
+// Until pairing is added, one fixed user is used.
+const DEMO_USER_ID = 'demo'
 
 app.use(cors())
 app.use(express.json())
@@ -63,7 +63,11 @@ app.post('/api/cards/approve', async (req, res) => {
       status: 'skipped',
     }
 
-    if (cleanDue) {
+        if (cleanDue) {
+      const googleTokens = await loadGoogleTokens(DEMO_USER_ID).catch((err) => {
+        console.error('Token load failed:', err.message)
+        return null
+      })
       if (!googleTokens?.refresh_token) {
         calendar.status = 'not_connected'
         console.log('Calendar event skipped: Google not connected')
@@ -166,8 +170,7 @@ app.get('/auth/google/callback', async (req, res) => {
 
     oauth2Client.setCredentials(tokens)
 
-    // Temporary storage for this server session only.
-    googleTokens = tokens
+  
 
     console.log(
       'Google OAuth connected. Refresh token received:',
@@ -179,6 +182,9 @@ app.get('/auth/google/callback', async (req, res) => {
         'Google authorization succeeded, but no refresh token was returned. Check the Google account permissions and try reconnecting if needed.',
       )
     }
+
+        await saveGoogleTokens(DEMO_USER_ID, tokens)
+    console.log('Google tokens saved (encrypted) in MongoDB')
 
     res.status(200).send(
       'Google Calendar connected successfully! You can close this page.',
