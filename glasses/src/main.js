@@ -20,6 +20,7 @@ const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a du
 
 // 16 kHz x 2 bytes x 10 seconds
 const AUDIO_CHUNK_BYTES = 320000
+const AUDIO_HOP_BYTES = AUDIO_CHUNK_BYTES / 2 // 5 seconds
 const AUDIO_BYTES_PER_SECOND = 32000
 
 const SCREENS = {
@@ -300,38 +301,38 @@ async function main() {
     })
   }
 
-  // Add incoming PCM data to the 10-second buffer
-  function bufferAudio(pcm) {
-    let sourceOffset = 0
+// Upload overlapping 10-second windows every 5 seconds
+function bufferAudio(pcm) {
+  let sourceOffset = 0
 
-    while (sourceOffset < pcm.length) {
-      const availableSpace = AUDIO_CHUNK_BYTES - audioBufferOffset
+  while (sourceOffset < pcm.length) {
+    const availableSpace = AUDIO_CHUNK_BYTES - audioBufferOffset
 
-      const bytesToCopy = Math.min(
-        availableSpace,
-        pcm.length - sourceOffset,
-      )
+    const bytesToCopy = Math.min(
+      availableSpace,
+      pcm.length - sourceOffset,
+    )
 
-      audioBuffer.set(
-        pcm.subarray(sourceOffset, sourceOffset + bytesToCopy),
-        audioBufferOffset,
-      )
+    audioBuffer.set(
+      pcm.subarray(sourceOffset, sourceOffset + bytesToCopy),
+      audioBufferOffset,
+    )
 
-      audioBufferOffset += bytesToCopy
-      sourceOffset += bytesToCopy
+    audioBufferOffset += bytesToCopy
+    sourceOffset += bytesToCopy
 
-      // Buffer is full: upload the complete 10-second chunk
-      if (audioBufferOffset === AUDIO_CHUNK_BYTES) {
-        const completedChunk = audioBuffer
+    if (audioBufferOffset === AUDIO_CHUNK_BYTES) {
+      // Copy the completed window before reusing the buffer
+      const completedChunk = audioBuffer.slice()
 
-        // Create a fresh buffer for the next recording
-        audioBuffer = new Uint8Array(AUDIO_CHUNK_BYTES)
-        audioBufferOffset = 0
+      // Retain the last 5 seconds for the next overlapping window
+      audioBuffer.copyWithin(0, AUDIO_HOP_BYTES)
+      audioBufferOffset = AUDIO_HOP_BYTES
 
-        uploadAudioChunk(completedChunk)
-      }
+      uploadAudioChunk(completedChunk)
     }
   }
+}
 
   async function startMicrophone() {
     if (microphoneActive) return
