@@ -1,4 +1,4 @@
-import { checkServerHealth } from './api.js'
+import { checkServerHealth, getDeviceId, startPairing } from './api.js'
 import {
   AudioInputSource,
   waitForEvenAppBridge,
@@ -14,6 +14,8 @@ const LONG_PRESS = 10
 
 const API_URL = 'http://localhost:3000/api/audio'
 const APPROVE_URL = 'http://localhost:3000/api/cards/approve'
+// Shown on the glasses; the user opens this page on their phone (change when we deploy)
+const PAIR_PAGE = 'localhost:3000/pair'
 const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
 // 16 kHz x 2 bytes x 10 seconds
 const AUDIO_CHUNK_BYTES = 320000
@@ -52,6 +54,9 @@ async function main() {
 
   let state = 'idle'
   let serverStatus = 'Checking...'
+    const deviceId = getDeviceId()
+  let paired = false
+  let pairCode = ''
 
   // Microphone state
   let microphoneActive = false
@@ -75,8 +80,11 @@ async function main() {
   let saveMessage = ''
   const seenKeys = new Map() // promise key -> time it was shown
   function getScreenContent(screen) {
-    if (screen === 'idle') {
-      return `Kept\n\nServer: ${serverStatus}\nTap to start meeting\nDouble tap to exit`
+       if (screen === 'idle') {
+      const calendarLines = paired
+        ? 'Calendar: linked'
+        : `Calendar: not linked\nOpen ${PAIR_PAGE}\nCode: ${pairCode || '...'}`
+      return `Kept | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting\nDouble tap to exit`
     }
 
     if (screen === 'listening') {
@@ -408,14 +416,39 @@ async function main() {
     }
   })
 
-  // Backend health check
-  checkServerHealth().then((isOnline) => {
+  // Asks the server for a pairing code, or learns that we are already paired
+  async function refreshPairing() {
+    const wasPaired = paired
+    const oldCode = pairCode
+
+    try {
+      const data = await startPairing(deviceId)
+      paired = Boolean(data.paired)
+      pairCode = data.code || ''
+    } catch (error) {
+      console.error('Pairing check failed:', error)
+    }
+
+    if (state === 'idle' && (paired !== wasPaired || pairCode !== oldCode)) {
+      show('idle')
+    }
+  }
+
+  // Backend health check, then pairing check
+  checkServerHealth().then(async (isOnline) => {
     serverStatus = isOnline ? 'OK' : 'Offline'
 
     if (state === 'idle') {
       show('idle')
     }
+
+    if (isOnline) await refreshPairing()
   })
+
+  // While not paired, keep the code fresh and notice when pairing is done
+  setInterval(() => {
+    if (serverStatus === 'OK' && !paired && state === 'idle') refreshPairing()
+  }, 5000)
 }
 
 main()
