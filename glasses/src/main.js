@@ -17,6 +17,7 @@ const APPROVE_URL = 'http://localhost:3000/api/cards/approve'
 // Shown on the glasses; the user opens this page on their phone (change when we deploy)
 const PAIR_PAGE = 'localhost:3000/pair'
 const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
+
 // 16 kHz x 2 bytes x 10 seconds
 const AUDIO_CHUNK_BYTES = 320000
 const AUDIO_BYTES_PER_SECOND = 32000
@@ -54,7 +55,7 @@ async function main() {
 
   let state = 'idle'
   let serverStatus = 'Checking...'
-    const deviceId = getDeviceId()
+  const deviceId = getDeviceId()
   let paired = false
   let pairCode = ''
 
@@ -79,8 +80,16 @@ async function main() {
   let pendingCards = []
   let saveMessage = ''
   const seenKeys = new Map() // promise key -> time it was shown
+
+  // Counters for the end-of-meeting summary
+  let stats = { caught: 0, added: 0, skipped: 0 }
+
+  function resetStats() {
+    stats = { caught: 0, added: 0, skipped: 0 }
+  }
+
   function getScreenContent(screen) {
-       if (screen === 'idle') {
+    if (screen === 'idle') {
       const calendarLines = paired
         ? 'Calendar: linked'
         : `Calendar: not linked\nOpen ${PAIR_PAGE}\nCode: ${pairCode || '...'}`
@@ -92,14 +101,23 @@ async function main() {
         audioBufferOffset / AUDIO_BYTES_PER_SECOND
       ).toFixed(1)
 
-      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\nHeard: ${lastHeard || '-'}\nPromises: ${lastPromises}\nSwipe up: pause\nHold: end meeting`    }
+      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\nHeard: ${lastHeard || '-'}\nPromises: ${lastPromises}\nSwipe up: pause\nHold: end meeting`
+    }
 
     if (screen === 'card') {
       return currentCard ? cardText(currentCard) : 'No card'
     }
+
+    if (screen === 'summary') {
+      const leftOver = stats.caught - stats.added - stats.skipped
+      const leftLine = leftOver > 0 ? `\nLeft over: ${leftOver}` : ''
+      return `Meeting ended\n\nPromises caught: ${stats.caught}\nAdded: ${stats.added} | Skipped: ${stats.skipped}${leftLine}\n\nTap to continue`
+    }
+
     if (screen === 'saved') {
       return saveMessage
     }
+
     return SCREENS[screen]
   }
 
@@ -150,11 +168,12 @@ async function main() {
     if (state !== 'listening' && state !== 'card' && state !== 'saved') return
 
     for (const card of list) {
-           const key = cardKey(card)
+      const key = cardKey(card)
       const lastSeen = seenKeys.get(key)
       if (lastSeen && Date.now() - lastSeen < DUPLICATE_WINDOW_MS) continue
       seenKeys.set(key, Date.now())
       pendingCards.push(card)
+      stats.caught++
     }
 
     if (state === 'listening' && pendingCards.length > 0) {
@@ -168,8 +187,8 @@ async function main() {
     seenKeys.clear()
   }
 
-  // Later (Day 5) this will create the Notion task and Calendar event
-    async function approveCard(card) {
+  // Saves the approved promise: Notion task, plus a Calendar event if the glasses are paired
+  async function approveCard(card) {
     saveMessage = 'Saving...\nNotion'
     show('saved')
 
@@ -178,10 +197,15 @@ async function main() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...card, deviceId }),
-            })
+      })
       const data = await response.json()
       if (!response.ok || !data.ok) throw new Error(`HTTP ${response.status}`)
-      saveMessage = data.calendar?.created ? 'Saved\nNotion + Calendar' : 'Saved\nNotion only'    } catch (error) {
+
+      saveMessage = data.calendar?.created
+        ? 'Saved\nNotion + Calendar'
+        : 'Saved\nNotion only'
+      stats.added++
+    } catch (error) {
       console.error('Save failed:', error)
       saveMessage = 'Save failed\nCheck server'
     }
@@ -330,7 +354,7 @@ async function main() {
   async function endMeeting() {
     await stopMicrophone()
     clearCards()
-    show('idle')
+    show('summary')
   }
 
   function eventTypeOf(envelope) {
@@ -387,6 +411,7 @@ async function main() {
 
     if (state === 'idle') {
       if (isClick) {
+        resetStats()
         show('listening')
         await startMicrophone()
       }
@@ -398,13 +423,16 @@ async function main() {
         await endMeeting()
       }
     } else if (state === 'card') {
-         if (isClick) {
+      if (isClick) {
         await approveCard(currentCard)
       } else if (isDown) {
+        stats.skipped++
         showNextCard()
       } else if (isLong) {
         await endMeeting()
       }
+    } else if (state === 'summary') {
+      if (isClick) show('idle')
     } else if (state === 'paused') {
       if (isUp) {
         show('listening')
