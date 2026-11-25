@@ -1,8 +1,7 @@
 // Pairing codes: the glasses show a short code, the user types it on the /pair web page.
 import { randomBytes, randomInt } from 'node:crypto'
 import { getDb } from './db.js'
-import { saveGoogleTokens } from './store.js'
-
+import { saveGoogleTokens, loadGoogleTokens } from './store.js'
 // No 0/O or 1/I, so the code is easy to read on the glasses
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 const CODE_TTL_MS = 10 * 60 * 1000
@@ -83,4 +82,25 @@ export async function completePairing(code, tokens) {
     { upsert: true },
   )
   return userId
+}
+
+
+// Erases the user linked to this device (tokens, device record, open pairing codes)
+export async function deleteDeviceData(deviceId) {
+  const db = await getDb()
+
+  const device = await db.collection('devices').findOne({ _id: deviceId })
+  const userId = device?.userId || null
+
+  let tokens = null
+  if (userId) {
+    tokens = await loadGoogleTokens(userId)
+    await db.collection('users').deleteOne({ _id: userId })
+    await db.collection('devices').deleteMany({ userId })
+  }
+
+  await db.collection('devices').deleteOne({ _id: deviceId })
+  await db.collection('pairings').deleteMany({ deviceId })
+
+  return { tokens }
 }

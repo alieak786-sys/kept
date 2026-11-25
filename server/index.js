@@ -6,6 +6,7 @@ import { createNotionTask } from './notion.js'
 import {
   createGoogleOAuthClient,
   createCalendarDeadline,
+  revokeGoogleAccess,
 } from './google.js'
 import { randomBytes } from 'node:crypto'
 import { saveGoogleTokens, loadGoogleTokens } from './store.js'
@@ -16,6 +17,7 @@ import {
   getPairedUserId,
   findValidPairing,
   completePairing,
+  deleteDeviceData,
 } from './pairing.js'
 import { pairPage, pairedPage } from './pages.js'
 const app = express()
@@ -108,6 +110,32 @@ app.get('/pair/connect', async (req, res) => {
   }
 })
 
+
+// "Delete my data": removes the saved Google login and unlinks these glasses
+app.post('/api/data/delete', async (req, res) => {
+  const { deviceId } = req.body || {}
+  if (!isValidDeviceId(deviceId)) {
+    return res.status(400).json({ ok: false, error: 'Invalid device id' })
+  }
+
+  try {
+    const { tokens } = await deleteDeviceData(deviceId)
+
+    if (tokens) {
+      try {
+        await revokeGoogleAccess(tokens)
+      } catch (err) {
+        console.error('Google revoke failed:', err.message)
+      }
+    }
+
+    console.log('User data deleted for one device')
+    res.json({ ok: true })
+  } catch (err) {
+    console.error('Data delete failed:', err.message)
+    res.status(500).json({ ok: false, error: 'Could not delete data' })
+  }
+})
 // Called when the user taps "add" on a promise card
 app.post('/api/cards/approve', async (req, res) => {
   const { task, person, due, deviceId } = req.body || {}

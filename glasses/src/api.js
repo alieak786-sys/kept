@@ -53,3 +53,19 @@ export async function startPairing(deviceId) {
   }
   return data
 }
+
+
+// Asks the server to erase this user's saved login and unlink the glasses
+export async function deleteMyData(deviceId) {
+  const response = await fetch(`${API_BASE_URL}/api/data/delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceId }),
+  })
+  const data = await response.json()
+
+  if (!response.ok || !data.ok) {
+    throw new Error(`HTTP ${response.status}`)
+  }
+  return data
+}

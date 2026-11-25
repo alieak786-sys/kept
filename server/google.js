@@ -77,3 +77,12 @@ export async function createCalendarDeadline(tokens, { task, person, due }) {
     url: response.data.htmlLink,
   }
 }
+
+// Tells Google to cancel the access Kept was given (best effort)
+export async function revokeGoogleAccess(tokens) {
+  const token = tokens?.refresh_token || tokens?.access_token
+  if (!token) return
+
+  const oauth2Client = createGoogleOAuthClient()
+  await oauth2Client.revokeToken(token)
+}

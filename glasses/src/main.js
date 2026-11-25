@@ -1,4 +1,4 @@
-import { checkServerHealth, getDeviceId, startPairing } from './api.js'
+import { checkServerHealth, getDeviceId, startPairing, deleteMyData } from './api.js'
 import {
   AudioInputSource,
   waitForEvenAppBridge,
@@ -93,7 +93,8 @@ async function main() {
       const calendarLines = paired
         ? 'Calendar: linked'
         : `Calendar: not linked\nOpen ${PAIR_PAGE}\nCode: ${pairCode || '...'}`
-      return `Kept | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting\nDouble tap to exit`
+      const deleteLine = paired ? '\nSwipe up: delete my data' : ''
+      return `Kept | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting${deleteLine}\nDouble tap to exit`
     }
 
     if (screen === 'listening') {
@@ -106,6 +107,10 @@ async function main() {
 
     if (screen === 'card') {
       return currentCard ? cardText(currentCard) : 'No card'
+    }
+
+    if (screen === 'confirmDelete') {
+      return 'Delete my data?\n\nUnlinks Google Calendar\nand erases the saved login.\n\nTap = delete\nSwipe down = cancel'
     }
 
     if (screen === 'summary') {
@@ -214,6 +219,28 @@ async function main() {
     setTimeout(() => {
       if (state === 'saved') showNextCard()
     }, 1500)
+  }
+  
+  // Erases the saved Google login and unlinks these glasses
+  async function deleteData() {
+    saveMessage = 'Deleting...'
+    show('saved')
+
+    try {
+      await deleteMyData(deviceId)
+      paired = false
+      pairCode = ''
+      saveMessage = 'Data deleted\nCalendar unlinked'
+    } catch (error) {
+      console.error('Delete failed:', error)
+      saveMessage = 'Delete failed\nCheck server'
+    }
+
+    show('saved')
+    setTimeout(async () => {
+      await refreshPairing()
+      if (state === 'saved') show('idle')
+    }, 2000)
   }
 
   // ---- Audio ----
@@ -414,6 +441,14 @@ async function main() {
         resetStats()
         show('listening')
         await startMicrophone()
+      } else if (isUp && paired) {
+        show('confirmDelete')
+      }
+    } else if (state === 'confirmDelete') {
+      if (isClick) {
+        await deleteData()
+      } else if (isDown) {
+        show('idle')
       }
     } else if (state === 'listening') {
       if (isUp) {
