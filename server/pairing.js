@@ -1,6 +1,7 @@
 // Pairing codes: the glasses show a short code, the user types it on the /pair web page.
-import { randomInt } from 'node:crypto'
+import { randomBytes, randomInt } from 'node:crypto'
 import { getDb } from './db.js'
+import { saveGoogleTokens } from './store.js'
 
 // No 0/O or 1/I, so the code is easy to read on the glasses
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
@@ -55,4 +56,31 @@ export async function startPairing(deviceId) {
     }
   }
   throw new Error('Could not create a pairing code')
+}
+
+export async function findValidPairing(code) {
+  const db = await getDb()
+  return db.collection('pairings').findOne({ _id: code, expiresAt: { $gt: new Date() } })
+}
+
+// Called after Google login: creates the user, saves tokens, links the glasses
+export async function completePairing(code, tokens) {
+  const db = await getDb()
+
+  // Deleting the code makes it single-use
+  const result = await db.collection('pairings').findOneAndDelete({
+    _id: code,
+    expiresAt: { $gt: new Date() },
+  })
+  const pairing = result && result.value !== undefined ? result.value : result
+  if (!pairing) return null
+
+  const userId = `user_${randomBytes(12).toString('hex')}`
+  await saveGoogleTokens(userId, tokens)
+  await db.collection('devices').updateOne(
+    { _id: pairing.deviceId },
+    { $set: { userId, pairedAt: new Date() } },
+    { upsert: true },
+  )
+  return userId
 }

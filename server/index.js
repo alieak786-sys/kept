@@ -9,7 +9,15 @@ import {
 } from './google.js'
 import { randomBytes } from 'node:crypto'
 import { saveGoogleTokens, loadGoogleTokens } from './store.js'
-import { ensureIndexes, isValidDeviceId, startPairing, getPairedUserId } from './pairing.js'
+import {
+  ensureIndexes,
+  isValidDeviceId,
+  startPairing,
+  getPairedUserId,
+  findValidPairing,
+  completePairing,
+} from './pairing.js'
+import { pairPage, pairedPage } from './pages.js'
 const app = express()
 
 // OAuth "state" values live in memory for 10 minutes (fine to lose on restart).
@@ -17,6 +25,10 @@ const googleOAuthStates = new Map()
 
 // Until pairing is added, one fixed user is used.
 const DEMO_USER_ID = 'demo'
+
+
+// Which pairing code started which Google login (state -> code)
+const pairingByState = new Map()
 
 app.use(cors())
 app.use(express.json())
@@ -53,6 +65,49 @@ app.get('/api/pair/status', async (req, res) => {
     res.status(500).json({ ok: false, error: 'Could not check pairing' })
   }
 })
+
+// Page where the user types the code shown on the glasses
+app.get('/pair', (req, res) => {
+  res.send(pairPage())
+})
+
+// Starts Google login for a valid pairing code
+app.get('/pair/connect', async (req, res) => {
+  const code = String(req.query.code || '').trim().toUpperCase()
+
+  if (!/^[A-Z0-9]{6}$/.test(code)) {
+    return res.status(400).send(pairPage('That code does not look right. It has 6 letters or numbers.'))
+  }
+
+  try {
+    const pairing = await findValidPairing(code)
+    if (!pairing) {
+      return res.status(400).send(pairPage('Code not found or expired. Check your glasses for a fresh code.'))
+    }
+
+    // Forget finished or expired logins
+    for (const savedState of pairingByState.keys()) {
+      if (!googleOAuthStates.has(savedState)) pairingByState.delete(savedState)
+    }
+
+    const state = randomBytes(32).toString('hex')
+    googleOAuthStates.set(state, Date.now() + 10 * 60 * 1000)
+    pairingByState.set(state, code)
+
+    const url = createGoogleOAuthClient().generateAuthUrl({
+      access_type: 'offline',
+      prompt: 'consent',
+      include_granted_scopes: true,
+      scope: ['https://www.googleapis.com/auth/calendar.events'],
+      state,
+    })
+    res.redirect(url)
+  } catch (err) {
+    console.error('Pair connect failed:', err.message)
+    res.status(500).send(pairPage('Something went wrong. Please try again.'))
+  }
+})
+
 // Called when the user taps "add" on a promise card
 app.post('/api/cards/approve', async (req, res) => {
   const { task, person, due } = req.body || {}
@@ -211,7 +266,19 @@ app.get('/auth/google/callback', async (req, res) => {
       )
     }
 
-        await saveGoogleTokens(DEMO_USER_ID, tokens)
+          // Login that started from the /pair page: link these tokens to the glasses
+    const pairingCode = pairingByState.get(state)
+    pairingByState.delete(state)
+    if (pairingCode) {
+      const userId = await completePairing(pairingCode, tokens)
+      if (!userId) {
+        return res.status(400).send(pairPage('This code expired. Get a fresh code on your glasses and try again.'))
+      }
+      console.log('Pairing completed for a new user')
+      return res.status(200).send(pairedPage())
+    }
+
+    await saveGoogleTokens(DEMO_USER_ID, tokens)
     console.log('Google tokens saved (encrypted) in MongoDB')
 
     res.status(200).send(
