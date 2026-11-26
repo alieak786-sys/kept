@@ -22,6 +22,7 @@ const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a du
 const AUDIO_CHUNK_BYTES = 320000
 const AUDIO_HOP_BYTES = AUDIO_CHUNK_BYTES / 2 // 5 seconds
 const AUDIO_BYTES_PER_SECOND = 32000
+const RECENT_BYTES = AUDIO_BYTES_PER_SECOND * 30 // last 30 seconds, for the manual check
 
 const SCREENS = {
   paused: 'Paused\n\nSwipe up: resume\nHold: end meeting',
@@ -73,6 +74,13 @@ async function main() {
   let lastHeard = ''
   let lastPromises = 0
 
+  // Last 30 seconds of audio, for the manual "check now" tap
+  let recentChunks = []
+  let recentBytes = 0
+
+  // Short message shown on the listening screen (for example "Nothing new found")
+  let notice = ''
+
   // Keep uploads in order
   let uploadQueue = Promise.resolve()
 
@@ -103,7 +111,7 @@ async function main() {
         audioBufferOffset / AUDIO_BYTES_PER_SECOND
       ).toFixed(1)
 
-      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\nHeard: ${lastHeard || '-'}\nPromises: ${lastPromises}\nSwipe up: pause\nHold: end meeting`
+      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\n${notice || `Heard: ${lastHeard || '-'}`}\nPromises: ${lastPromises}\nTap: check last 30 s\nSwipe up: pause\nHold: end meeting`
     }
 
     if (screen === 'card') {
@@ -162,6 +170,19 @@ async function main() {
     )
   }
 
+  // Shows a short message on the listening screen for a few seconds
+  function showNotice(text, ms = 3000) {
+    notice = text
+    if (state === 'listening') show('listening')
+
+    setTimeout(() => {
+      if (notice === text) {
+        notice = ''
+        if (state === 'listening') show('listening')
+      }
+    }, ms)
+  }
+
   // ---- Promise cards ----
 
   function showNextCard() {
@@ -169,10 +190,12 @@ async function main() {
     show(currentCard ? 'card' : 'listening')
   }
 
+  // Adds new cards to the queue. Returns how many were new.
   function enqueueCards(list) {
     // Cards only matter while a meeting is running
-    if (state !== 'listening' && state !== 'card' && state !== 'saved') return
+    if (state !== 'listening' && state !== 'card' && state !== 'saved') return 0
 
+    let added = 0
     for (const card of list) {
       const key = cardKey(card)
       const lastSeen = seenKeys.get(key)
@@ -180,11 +203,13 @@ async function main() {
       seenKeys.set(key, Date.now())
       pendingCards.push(card)
       stats.caught++
+      added++
     }
 
     if (state === 'listening' && pendingCards.length > 0) {
       showNextCard()
     }
+    return added
   }
 
   function clearCards() {
@@ -221,7 +246,7 @@ async function main() {
       if (state === 'saved') showNextCard()
     }, 1500)
   }
-  
+
   // Erases the saved Google login and unlinks these glasses
   async function deleteData() {
     saveMessage = 'Deleting...'
@@ -246,14 +271,49 @@ async function main() {
 
   // ---- Audio ----
 
-  // Discard incomplete audio when capture stops
+  // Discard incomplete audio when capture starts or stops
   function resetAudioBuffer() {
     audioBuffer = new Uint8Array(AUDIO_CHUNK_BYTES)
     audioBufferOffset = 0
+    recentChunks = []
+    recentBytes = 0
   }
 
-  // Upload one complete 10-second audio chunk
-  function uploadAudioChunk(chunk) {
+  // Keeps roughly the last 30 seconds of audio in memory (never saved to disk)
+  function rememberRecent(pcm) {
+    recentChunks.push(pcm.slice())
+    recentBytes += pcm.length
+
+    while (
+      recentChunks.length > 1 &&
+      recentBytes - recentChunks[0].length >= RECENT_BYTES
+    ) {
+      recentBytes -= recentChunks.shift().length
+    }
+  }
+
+  // Manual fallback: send the last 30 seconds right now
+  function checkLastThirtySeconds() {
+    if (recentBytes < AUDIO_BYTES_PER_SECOND * 3) {
+      showNotice('Not enough audio yet')
+      return
+    }
+
+    const clip = new Uint8Array(recentBytes)
+    let offset = 0
+    for (const piece of recentChunks) {
+      clip.set(piece, offset)
+      offset += piece.length
+    }
+    const lastPart =
+      clip.length > RECENT_BYTES ? clip.subarray(clip.length - RECENT_BYTES) : clip
+
+    showNotice('Checking last 30 s...', 15000)
+    uploadAudioChunk(lastPart, { manual: true })
+  }
+
+  // Upload one audio clip (manual = true when the user tapped "check last 30 s")
+  function uploadAudioChunk(chunk, { manual = false } = {}) {
     uploadQueue = uploadQueue.then(async () => {
       const response = await fetch(API_URL, {
         method: 'POST',
@@ -283,9 +343,11 @@ async function main() {
         data.commitments?.length ?? 0,
       )
 
-      if (Array.isArray(data.commitments) && data.commitments.length > 0) {
-        enqueueCards(data.commitments)
-      }
+      const added = Array.isArray(data.commitments)
+        ? enqueueCards(data.commitments)
+        : 0
+
+      if (manual && added === 0) showNotice('Nothing new found')
 
       // Refresh the counters if we are still on the listening screen
       if (state === 'listening') {
@@ -295,44 +357,48 @@ async function main() {
       uploadStatus = 'FAILED'
       console.error('Audio upload error:', error)
 
+      if (manual) showNotice('Check failed')
+
       if (state === 'listening') {
         show('listening')
       }
     })
   }
 
-// Upload overlapping 10-second windows every 5 seconds
-function bufferAudio(pcm) {
-  let sourceOffset = 0
+  // Upload overlapping 10-second windows every 5 seconds
+  function bufferAudio(pcm) {
+    rememberRecent(pcm)
 
-  while (sourceOffset < pcm.length) {
-    const availableSpace = AUDIO_CHUNK_BYTES - audioBufferOffset
+    let sourceOffset = 0
 
-    const bytesToCopy = Math.min(
-      availableSpace,
-      pcm.length - sourceOffset,
-    )
+    while (sourceOffset < pcm.length) {
+      const availableSpace = AUDIO_CHUNK_BYTES - audioBufferOffset
 
-    audioBuffer.set(
-      pcm.subarray(sourceOffset, sourceOffset + bytesToCopy),
-      audioBufferOffset,
-    )
+      const bytesToCopy = Math.min(
+        availableSpace,
+        pcm.length - sourceOffset,
+      )
 
-    audioBufferOffset += bytesToCopy
-    sourceOffset += bytesToCopy
+      audioBuffer.set(
+        pcm.subarray(sourceOffset, sourceOffset + bytesToCopy),
+        audioBufferOffset,
+      )
 
-    if (audioBufferOffset === AUDIO_CHUNK_BYTES) {
-      // Copy the completed window before reusing the buffer
-      const completedChunk = audioBuffer.slice()
+      audioBufferOffset += bytesToCopy
+      sourceOffset += bytesToCopy
 
-      // Retain the last 5 seconds for the next overlapping window
-      audioBuffer.copyWithin(0, AUDIO_HOP_BYTES)
-      audioBufferOffset = AUDIO_HOP_BYTES
+      if (audioBufferOffset === AUDIO_CHUNK_BYTES) {
+        // Copy the completed window before reusing the buffer
+        const completedChunk = audioBuffer.slice()
 
-      uploadAudioChunk(completedChunk)
+        // Retain the last 5 seconds for the next overlapping window
+        audioBuffer.copyWithin(0, AUDIO_HOP_BYTES)
+        audioBufferOffset = AUDIO_HOP_BYTES
+
+        uploadAudioChunk(completedChunk)
+      }
     }
   }
-}
 
   async function startMicrophone() {
     if (microphoneActive) return
@@ -382,6 +448,7 @@ function bufferAudio(pcm) {
   async function endMeeting() {
     await stopMicrophone()
     clearCards()
+    notice = ''
     show('summary')
   }
 
@@ -452,7 +519,9 @@ function bufferAudio(pcm) {
         show('idle')
       }
     } else if (state === 'listening') {
-      if (isUp) {
+      if (isClick) {
+        checkLastThirtySeconds()
+      } else if (isUp) {
         show('paused')
         await stopMicrophone()
       } else if (isLong) {
