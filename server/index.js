@@ -7,6 +7,7 @@ import {
   createGoogleOAuthClient,
   createCalendarDeadline,
   revokeGoogleAccess,
+  createGmailDraft,
 } from './google.js'
 import { randomBytes } from 'node:crypto'
 import { saveGoogleTokens, loadGoogleTokens } from './store.js'
@@ -28,6 +29,22 @@ const googleOAuthStates = new Map()
 // Until pairing is added, one fixed user is used.
 const DEMO_USER_ID = 'demo'
 
+// What we ask Google for when a user pairs
+const GOOGLE_SCOPES = [
+  'https://www.googleapis.com/auth/calendar.events',
+  'https://www.googleapis.com/auth/gmail.compose',
+]
+
+// Finds the Google tokens of the user these glasses are paired with
+async function loadDeviceTokens(deviceId) {
+  try {
+    const userId = isValidDeviceId(deviceId) ? await getPairedUserId(deviceId) : null
+    return userId ? await loadGoogleTokens(userId) : null
+  } catch (err) {
+    console.error('Token load failed:', err.message)
+    return null
+  }
+}
 
 // Which pairing code started which Google login (state -> code)
 const pairingByState = new Map()
@@ -100,7 +117,7 @@ app.get('/pair/connect', async (req, res) => {
       access_type: 'offline',
       prompt: 'consent',
       include_granted_scopes: true,
-      scope: ['https://www.googleapis.com/auth/calendar.events'],
+      scope: GOOGLE_SCOPES,
       state,
     })
     res.redirect(url)
@@ -211,10 +228,36 @@ app.post('/api/cards/approve', async (req, res) => {
     }
 
     // Notion success remains success even if Calendar fails.
+    // Gmail: a follow-up DRAFT (never sent), only when the promise names a person
+    let gmail = { created: false, status: 'skipped' }
+
+    if (cleanPerson) {
+      const googleTokens = await loadDeviceTokens(deviceId)
+
+      if (!googleTokens?.refresh_token) {
+        gmail.status = 'not_connected'
+      } else {
+        try {
+          const draft = await createGmailDraft(googleTokens, {
+            task: cleanTask,
+            person: cleanPerson,
+            due: cleanDue,
+          })
+          gmail = { created: true, status: 'created', url: draft.url }
+          console.log('Gmail draft created')
+        } catch (gmailError) {
+          gmail.status = 'failed'
+          console.error('Gmail draft failed:', gmailError.message)
+        }
+      }
+    }
+
+    // Notion success remains success even if Calendar or Gmail fails.
     res.json({
       ok: true,
       url: page.url,
       calendar,
+      gmail,
     })
   } catch (err) {
     console.error(err.message)

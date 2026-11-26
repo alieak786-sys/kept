@@ -232,9 +232,10 @@ async function main() {
       const data = await response.json()
       if (!response.ok || !data.ok) throw new Error(`HTTP ${response.status}`)
 
-      saveMessage = data.calendar?.created
-        ? 'Saved\nNotion + Calendar'
-        : 'Saved\nNotion only'
+      const saved = ['Notion']
+      if (data.calendar?.created) saved.push('Calendar')
+      if (data.gmail?.created) saved.push('Gmail draft')
+      saveMessage = `Saved\n${saved.join(' + ')}`
       stats.added++
     } catch (error) {
       console.error('Save failed:', error)
