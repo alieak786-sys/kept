@@ -23,6 +23,9 @@ import {
 import { pairPage, pairedPage } from './pages.js'
 const app = express()
 
+// On the deployed server we never write what people said into the logs
+const isProduction = process.env.NODE_ENV === 'production'
+
 // OAuth "state" values live in memory for 10 minutes (fine to lose on restart).
 const googleOAuthStates = new Map()
 
@@ -384,14 +387,13 @@ app.post(
 
     try {
       const text = await transcribe(pcm)
-      console.log('Transcript:', text)
-
+      if (!isProduction) console.log('Transcript:', text)
       let commitments = []
       if (text) {
         try {
           commitments = await extractCommitments(text)
-          console.log('Commitments:', JSON.stringify(commitments))
-        } catch (err) {
+          if (!isProduction) console.log('Commitments:', JSON.stringify(commitments))     
+             } catch (err) {
           console.error('Extraction failed:', err.message)
         }
       }

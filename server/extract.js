@@ -45,7 +45,7 @@ async function callModel(model, messages) {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({ model, messages, temperature: 0 }),
-    signal: AbortSignal.timeout(30000),
+    signal: AbortSignal.timeout(15000),
   })
   if (!res.ok) throw new Error(`OpenRouter ${res.status}: ${await res.text()}`)
   const data = await res.json()
