@@ -6,9 +6,12 @@ import { createNotionTask } from './notion.js'
 import {
   createGoogleOAuthClient,
   createCalendarDeadline,
+  listCalendarEventsForDate,
   revokeGoogleAccess,
   createGmailDraft,
 } from './google.js'
+
+import { comparePromiseWithCalendar } from './calendar-match.js'
 import { randomBytes } from 'node:crypto'
 import { saveGoogleTokens, loadGoogleTokens } from './store.js'
 import {
@@ -154,6 +157,84 @@ app.post('/api/data/delete', async (req, res) => {
   } catch (err) {
     console.error('Data delete failed:', err.message)
     res.status(500).json({ ok: false, error: 'Could not delete data' })
+  }
+})
+// Checks existing Calendar plans before the user approves a promise.
+app.post('/api/cards/preview', async (req, res) => {
+  const { task, person, due, deviceId } = req.body || {}
+
+  if (typeof task !== 'string' || !task.trim()) {
+    return res.status(400).json({
+      ok: false,
+      error: 'Task is required',
+    })
+  }
+
+  const cleanTask = task.trim().slice(0, 200)
+
+  const cleanDue =
+    typeof due === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(due)
+      ? due
+      : null
+
+  if (!cleanDue) {
+    return res.json({
+      ok: true,
+      calendar: {
+        status: 'no_due_date',
+        events: [],
+        duplicate: null,
+      },
+    })
+  }
+
+  try {
+    const googleTokens = await loadDeviceTokens(deviceId)
+
+    if (!googleTokens?.refresh_token) {
+      return res.json({
+        ok: true,
+        calendar: {
+          status: 'not_connected',
+          events: [],
+          duplicate: null,
+        },
+      })
+    }
+
+    // Retrieve only events on the promise's due date.
+    const events = await listCalendarEventsForDate(
+      googleTokens,
+      cleanDue,
+    )
+
+    // Compare the new promise with those existing events.
+    const duplicate = await comparePromiseWithCalendar(
+      cleanTask,
+      events,
+    )
+
+    res.json({
+      ok: true,
+      calendar: {
+        status: 'checked',
+        events,
+        duplicate,
+      },
+    })
+  } catch (error) {
+    console.error('Calendar preview failed:', error.message)
+
+    // Do not prevent the user from reviewing or saving a promise
+    // just because Calendar could not be checked.
+    res.json({
+      ok: true,
+      calendar: {
+        status: 'failed',
+        events: [],
+        duplicate: null,
+      },
+    })
   }
 })
 // Called when the user taps "add" on a promise card

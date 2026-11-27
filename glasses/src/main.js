@@ -14,6 +14,7 @@ const LONG_PRESS = 10
 
 const API_URL = 'https://kept-production-9765f151.up.railway.app/api/audio'
 const APPROVE_URL = 'https://kept-production-9765f151.up.railway.app/api/cards/approve'
+const PREVIEW_URL = 'https://kept-production-9765f151.up.railway.app/api/cards/preview'
 const PAIR_PAGE = 'kept-production-9765f151.up.railway.app/pair'
 const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
 
@@ -87,6 +88,11 @@ async function main() {
   let currentCard = null
   let pendingCards = []
   let saveMessage = ''
+
+  // Calendar information for the promise currently being reviewed
+  let currentCalendarPreview = null
+  let reviewPageIndex = 0
+  const CALENDAR_EVENTS_PER_PAGE = 2
   const seenKeys = new Map() // promise key -> time it was shown
 
   // Counters for the end-of-meeting summary
@@ -96,6 +102,106 @@ async function main() {
     stats = { caught: 0, added: 0, skipped: 0 }
   }
 
+    function formatCalendarEventTime(event) {
+    if (event.allDay) return 'All day'
+    if (!event.start) return ''
+
+    const date = new Date(event.start)
+
+    if (Number.isNaN(date.getTime())) return ''
+
+    return date.toLocaleTimeString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'Asia/Karachi',
+    })
+  }
+
+  function reviewText() {
+    if (!currentCard) return 'No promise to review'
+
+    const preview = currentCalendarPreview || {
+      status: 'failed',
+      events: [],
+      duplicate: null,
+    }
+
+    const events = Array.isArray(preview.events)
+      ? preview.events
+      : []
+
+    const totalPages = Math.max(
+      1,
+      Math.ceil(events.length / CALENDAR_EVENTS_PER_PAGE),
+    )
+
+    const startIndex = reviewPageIndex * CALENDAR_EVENTS_PER_PAGE
+
+    const pageEvents = events.slice(
+      startIndex,
+      startIndex + CALENDAR_EVENTS_PER_PAGE,
+    )
+
+    const lines = [
+      `Promise: ${capitalise(currentCard.task).slice(0, 55)}`,
+      `Due: ${formatDue(currentCard.due)}`,
+    ]
+
+    if (preview.status === 'checked') {
+      const duplicate = preview.duplicate
+      const matchedEvent =
+        duplicate?.isDuplicate &&
+        Number.isInteger(duplicate.matchingEventIndex)
+          ? events[duplicate.matchingEventIndex]
+          : null
+
+      if (duplicate?.isDuplicate) {
+        lines.push(
+          `Possible duplicate: ${(matchedEvent?.title || 'Yes').slice(0, 32)}`,
+        )
+      } else {
+        lines.push('Possible duplicate: not detected')
+      }
+
+      lines.push('Existing plans:')
+
+      if (events.length === 0) {
+        lines.push('None on this date')
+      } else {
+        for (let i = 0; i < pageEvents.length; i++) {
+          const event = pageEvents[i]
+          const eventNumber = startIndex + i + 1
+          const eventTime = formatCalendarEventTime(event)
+
+          lines.push(
+            `${eventNumber}. ${String(event.title || 'Untitled').slice(0, 29)} ${eventTime}`,
+          )
+        }
+      }
+    } else if (preview.status === 'not_connected') {
+      lines.push('Calendar is not linked')
+      lines.push('Existing plans unavailable')
+    } else if (preview.status === 'no_due_date') {
+      lines.push('No due date to check')
+    } else {
+      lines.push('Calendar check unavailable')
+      lines.push('Existing plans could not be loaded')
+    }
+
+    if (totalPages > 1) {
+      lines.push(`Plans page: ${reviewPageIndex + 1}/${totalPages}`)
+    }
+
+    if (reviewPageIndex < totalPages - 1) {
+      lines.push('Tap = next plans')
+    } else {
+      lines.push('Tap = add to Notion')
+    }
+
+    lines.push('Swipe down = skip')
+
+return lines.join('\n')
+  }
   function getScreenContent(screen) {
     if (screen === 'idle') {
       const calendarLines = paired
@@ -113,8 +219,12 @@ async function main() {
       return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\n${notice || `Heard: ${lastHeard || '-'}`}\nPromises: ${lastPromises}\nTap: check last 30 s\nSwipe up: pause\nHold: end meeting`
     }
 
-    if (screen === 'card') {
-      return currentCard ? cardText(currentCard) : 'No card'
+    if (screen === 'checkingCalendar') {
+      return `Promise detected\n${currentCard ? capitalise(currentCard.task).slice(0, 55) : ''}\nDue: ${formatDue(currentCard?.due)}\n\nChecking Calendar...\nHold: end meeting`
+    }
+
+    if (screen === 'review') {
+      return reviewText()
     }
 
     if (screen === 'confirmDelete') {
@@ -184,15 +294,74 @@ async function main() {
 
   // ---- Promise cards ----
 
-  function showNextCard() {
+  async function showNextCard() {
     currentCard = pendingCards.shift() || null
-    show(currentCard ? 'card' : 'listening')
+    currentCalendarPreview = null
+    reviewPageIndex = 0
+
+    if (!currentCard) {
+      show('listening')
+      return
+    }
+
+    const cardBeingChecked = currentCard
+
+    // Display a loading screen while Calendar is checked.
+    show('checkingCalendar')
+
+    try {
+      const response = await fetch(PREVIEW_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          ...cardBeingChecked,
+          deviceId,
+        }),
+      })
+
+      const data = await response.json()
+
+      if (!response.ok || !data.ok) {
+        throw new Error(`Calendar preview HTTP ${response.status}`)
+      }
+
+      currentCalendarPreview = data.calendar || {
+        status: 'failed',
+        events: [],
+        duplicate: null,
+      }
+    } catch (error) {
+      console.error('Calendar preview request failed:', error)
+
+      currentCalendarPreview = {
+        status: 'failed',
+        events: [],
+        duplicate: null,
+      }
+    }
+
+    // Do not display an old result if the meeting was ended meanwhile.
+    if (
+      currentCard !== cardBeingChecked ||
+      state !== 'checkingCalendar'
+    ) {
+      return
+    }
+
+    show('review')
   }
 
   // Adds new cards to the queue. Returns how many were new.
   function enqueueCards(list) {
     // Cards only matter while a meeting is running
-    if (state !== 'listening' && state !== 'card' && state !== 'saved') return 0
+    if (
+      state !== 'listening' &&
+      state !== 'checkingCalendar' &&
+      state !== 'review' &&
+      state !== 'saved'
+    ) return 0
 
     let added = 0
     for (const card of list) {
@@ -214,6 +383,8 @@ async function main() {
   function clearCards() {
     currentCard = null
     pendingCards = []
+    currentCalendarPreview = null
+    reviewPageIndex = 0
     seenKeys.clear()
   }
 
@@ -527,12 +698,31 @@ async function main() {
       } else if (isLong) {
         await endMeeting()
       }
-    } else if (state === 'card') {
+    } else if (state === 'checkingCalendar') {
+      if (isLong) {
+        await endMeeting()
+      }
+    } else if (state === 'review') {
       if (isClick) {
-        await approveCard(currentCard)
+        const eventCount = Array.isArray(currentCalendarPreview?.events)
+          ? currentCalendarPreview.events.length
+          : 0
+
+        const totalPages = Math.max(
+          1,
+          Math.ceil(eventCount / CALENDAR_EVENTS_PER_PAGE),
+        )
+
+        // The user must review every page before the final Add action.
+        if (reviewPageIndex < totalPages - 1) {
+          reviewPageIndex++
+          show('review')
+        } else {
+          await approveCard(currentCard)
+        }
       } else if (isDown) {
         stats.skipped++
-        showNextCard()
+        await showNextCard()
       } else if (isLong) {
         await endMeeting()
       }

@@ -78,6 +78,62 @@ export async function createCalendarDeadline(tokens, { task, person, due }) {
   }
 }
 
+// The date is interpreted in Pakistan Standard Time (Asia/Karachi).
+export async function listCalendarEventsForDate(tokens, due) {
+  if (!tokens?.refresh_token) {
+    throw new Error('Google Calendar is not connected')
+  }
+
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(due || '')
+
+  if (!match) {
+    throw new Error('A valid due date is required')
+  }
+
+  // Validate that the date actually exists.
+  const [, yearText, monthText, dayText] = match
+  const year = Number(yearText)
+  const month = Number(monthText)
+  const day = Number(dayText)
+
+  const dateCheck = new Date(Date.UTC(year, month - 1, day))
+
+  if (
+    dateCheck.getUTCFullYear() !== year ||
+    dateCheck.getUTCMonth() !== month - 1 ||
+    dateCheck.getUTCDate() !== day
+  ) {
+    throw new Error('Invalid calendar date')
+  }
+
+  // Find the exact Pakistan-local day in UTC.
+  const dayStart = new Date(`${due}T00:00:00+05:00`)
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+
+  const oauth2Client = createGoogleOAuthClient()
+  oauth2Client.setCredentials(tokens)
+
+  const calendar = google.calendar({
+    version: 'v3',
+    auth: oauth2Client,
+  })
+
+  const response = await calendar.events.list({
+    calendarId: 'primary',
+    timeMin: dayStart.toISOString(),
+    timeMax: dayEnd.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+    maxResults: 100,
+  })
+
+  return (response.data.items || []).map((event) => ({
+    title: (event.summary || 'Untitled event').slice(0, 120),
+    start: event.start?.dateTime || event.start?.date || null,
+    end: event.end?.dateTime || event.end?.date || null,
+    allDay: Boolean(event.start?.date && !event.start?.dateTime),
+  }))
+}
 // Tells Google to cancel the access VowGlass was given (best effort)
 export async function revokeGoogleAccess(tokens) {
   const token = tokens?.refresh_token || tokens?.access_token
