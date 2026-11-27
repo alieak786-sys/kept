@@ -1,8 +1,7 @@
-
 {
   "package_id": "com.example.g2demo",
   "edition": "202601",
-  "name": "G2 Demo",
+  "name": "VowGlass",
   "version": "0.1.0",
   "min_app_version": "2.2.10",
   "min_sdk_version": "0.0.16",
@@ -10,18 +9,15 @@
   "permissions": [
     {
       "name": "network",
-      "desc": "Allows Kept to communicate with its backend server.",
+      "desc": "Allows VowGlass to communicate with its backend server.",
       "whitelist": [
-        "http://localhost:3000"
+        "http://localhost:3000",
+        "https://kept-production-9765f151.up.railway.app"
       ]
     },
     {
       "name": "g2-microphone",
-      "desc": "Allows Kept to capture meeting audio."
-    },
-    {
-      "name": "location",
-      "desc": "This app needs to access the location in order to ..."
+      "desc": "Allows VowGlass to capture meeting audio."
     }
   ],
   "supported_languages": [

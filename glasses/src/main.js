@@ -12,10 +12,9 @@ const SWIPE_UP = 1
 const SWIPE_DOWN = 2
 const LONG_PRESS = 10
 
-const API_URL = 'http://localhost:3000/api/audio'
-const APPROVE_URL = 'http://localhost:3000/api/cards/approve'
-// Shown on the glasses; the user opens this page on their phone (change when we deploy)
-const PAIR_PAGE = 'localhost:3000/pair'
+const API_URL = 'https://kept-production-9765f151.up.railway.app/api/audio'
+const APPROVE_URL = 'https://kept-production-9765f151.up.railway.app/api/cards/approve'
+const PAIR_PAGE = 'kept-production-9765f151.up.railway.app/pair'
 const DUPLICATE_WINDOW_MS = 60000 // same promise within 60 s is treated as a duplicate
 
 // 16 kHz x 2 bytes x 10 seconds
@@ -103,7 +102,7 @@ async function main() {
         ? 'Calendar: linked'
         : `Calendar: not linked\nOpen ${PAIR_PAGE}\nCode: ${pairCode || '...'}`
       const deleteLine = paired ? '\nSwipe up: delete my data' : ''
-      return `Kept | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting${deleteLine}\nDouble tap to exit`
+      return `VowGlass | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting${deleteLine}\nDouble tap to exit`
     }
 
     if (screen === 'listening') {

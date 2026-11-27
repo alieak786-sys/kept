@@ -1,4 +1,4 @@
-// Creates a task row in the "Kept Tasks" Notion database.
+// Creates a task row in the "VowGlass Tasks" Notion database.
 
 const NOTION_URL = 'https://api.notion.com/v1/pages'
 

@@ -59,8 +59,8 @@ export async function createCalendarDeadline(tokens, { task, person, due }) {
   })
 
   const description = person
-    ? `For: ${person}\nCreated by Kept`
-    : 'Created by Kept'
+    ? `For: ${person}\nCreated by VowGlass`
+    : 'Created by VowGlass'
 
   const response = await calendar.events.insert({
     calendarId: 'primary',
@@ -78,7 +78,7 @@ export async function createCalendarDeadline(tokens, { task, person, due }) {
   }
 }
 
-// Tells Google to cancel the access Kept was given (best effort)
+// Tells Google to cancel the access VowGlass was given (best effort)
 export async function revokeGoogleAccess(tokens) {
   const token = tokens?.refresh_token || tokens?.access_token
   if (!token) return
@@ -123,7 +123,7 @@ export async function createGmailDraft(tokens, { task, person, due }) {
     '',
     'Best regards',
     '',
-    '(Draft created by Kept. Please review before sending.)',
+    '(Draft created by VowGlass. Please review before sending.)',
   ].join('\r\n')
 
   const message = [

@@ -1,5 +1,4 @@
-const API_BASE_URL = 'http://localhost:3000'
-
+const API_BASE_URL = 'https://kept-production-9765f151.up.railway.app'
 export async function checkServerHealth() {
   try {
     const response = await fetch(`${API_BASE_URL}/api/health`)
@@ -11,7 +10,7 @@ export async function checkServerHealth() {
     const data = await response.json()
     return data.ok === true
   } catch (error) {
-    console.error('Kept backend health check failed:', error)
+    console.error('VowGlass backend health check failed:', error)
     return false
   }
 }

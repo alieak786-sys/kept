@@ -22,7 +22,7 @@ function layout(body) {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Kept: pair your glasses</title>
+  <title>VowGlass: pair your glasses</title>
   <style>${STYLE}</style>
 </head>
 <body><main>${body}</main></body>
@@ -31,14 +31,14 @@ function layout(body) {
 
 export function pairPage(message = '') {
   return layout(`
-    <h1>Kept</h1>
+    <h1>VowGlass</h1>
     <p>Type the code shown on your glasses.</p>
     ${message ? `<p class="msg">${message}</p>` : ''}
     <form action="/pair/connect" method="get">
       <input name="code" maxlength="6" placeholder="ABC123" autocomplete="off" autocapitalize="characters" required autofocus>
       <button type="submit">Connect Google Calendar</button>
     </form>
-    <p class="small">Kept only adds calendar events for promises you approve. It never stores your meeting audio.</p>
+    <p class="small">VowGlass only adds calendar events for promises you approve. It never stores your meeting audio.</p>
   `)
 }
 

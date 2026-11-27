@@ -409,5 +409,5 @@ ensureIndexes().catch((err) => console.error('Index setup failed:', err.message)
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => {
-  console.log(`Kept server running on http://localhost:${PORT}`)
+  console.log(`VowGlass server running on http://localhost:${PORT}`)
 })
