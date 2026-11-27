@@ -211,12 +211,8 @@ return lines.join('\n')
       return `VowGlass | Server: ${serverStatus}\n${calendarLines}\nTap to start meeting${deleteLine}\nDouble tap to exit`
     }
 
-    if (screen === 'listening') {
-      const bufferedSeconds = (
-        audioBufferOffset / AUDIO_BYTES_PER_SECOND
-      ).toFixed(1)
-
-      return `* Listening | Mic: ${microphoneStatus}\nSent: ${uploadedChunkCount} | ${uploadStatus} | Buffer ${bufferedSeconds}s\n${notice || `Heard: ${lastHeard || '-'}`}\nPromises: ${lastPromises}\nTap: check last 30 s\nSwipe up: pause\nHold: end meeting`
+        if (screen === 'listening') {
+      return `* Listening | Mic: ${microphoneStatus}\n\n${notice || 'Listening for promises...'}\n\nTap: check last 30 s\nSwipe up: pause\nHold: end meeting`
     }
 
     if (screen === 'checkingCalendar') {
