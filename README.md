@@ -1,6 +1,6 @@
 # VowGlass: Promise Keeper for Even G2
 
-> Never forget what you promised in a meeting. VowGlass listens through your Even G2 glasses, catches promises you say out loud, and with one tap turns them into a Notion task, a Google Calendar deadline and a Gmail follow-up draft.
+> Never forget what you promised in a meeting. VowGlass listens through your Even G2 glasses, catches promises you say out loud, checks your Google Calendar for that day, and with one tap turns them into a Notion task, a Google Calendar deadline and a Gmail follow-up draft.
 
 **Heads Up: Even Realities Hackathon, Track 04**
 
@@ -21,14 +21,13 @@ In meetings we say things like "I'll send you the report by Friday" and then for
         ! Promise caught
         Send the budget to Sara
         Due: Fri 27 Nov
-        Tap = add
-        Swipe down = skip
 
-5. Tap to approve. VowGlass then creates:
+5. **Read:** before anything is saved, VowGlass reads your Google Calendar for the due date. The glasses show your existing plans for that day and warn you if the new promise looks like a duplicate of one of them.
+6. **Write:** you decide. Tap = add, swipe down = skip. When you approve, VowGlass creates:
    - a **Notion** task (title, due date, who it is for),
    - a **Google Calendar** all-day deadline,
    - a **Gmail draft** follow-up when the promise names a person. It is only a draft; nothing is ever sent.
-6. At the end of the meeting a summary shows how many promises were caught, added and skipped.
+7. At the end of the meeting a summary shows how many promises were caught, added and skipped.
 
 ## Gestures
 
@@ -43,10 +42,11 @@ In meetings we say things like "I'll send you the report by Friday" and then for
 ## Features
 
 - Live promise detection from speech, with relative dates resolved ("Friday", "tomorrow") to real dates
-- Read and write on real accounts: Notion, Google Calendar, Gmail drafts
+- **Reads before it writes:** checks your Google Calendar for the promised day, shows existing plans on the glasses and flags possible duplicates (AI comparison with a local word-similarity fallback). You decide whether to add the promise.
+- Read and write on real accounts: Google Calendar (read and write), Notion (write), Gmail drafts (write)
 - Account linking by pairing code: the glasses show a short code, you open the pairing page on your phone and sign in with Google (Google sign-in does not work inside the glasses WebView)
 - Manual "check the last 30 seconds" tap as a fallback if the AI missed something
-- Duplicate protection (the same promise is not shown twice within a minute)
+- Duplicate protection: the same promise is not shown twice within a minute, and it is compared with your existing Calendar plans
 - End-of-meeting summary
 - "Delete my data" on the glasses: erases the stored login and revokes Google access
 - Retries and timeouts around the speech and AI services, with a backup AI model
@@ -57,10 +57,11 @@ In meetings we say things like "I'll send you the report by Friday" and then for
 - **Transcripts are never stored.** In production the server does not write them to its logs either.
 - The database holds only: a pairing code (deleted after use or after 10 minutes), a device id, a user id and the user's Google tokens, **encrypted with AES-256-GCM**.
 - Only promises the user explicitly approves are written to Notion, Calendar or Gmail.
+- Calendar event titles for the promised day are read only to check for duplicates and are sent to the OpenRouter model for that comparison. VowGlass does not store them.
 - Gmail: VowGlass requests the `gmail.compose` permission. Google describes this permission as "manage drafts and send emails". The code only ever creates drafts and never calls the send endpoint.
 - Google tokens can be deleted at any time from the glasses ("delete my data"). Tasks and events already created stay in the user's own Notion and Calendar.
 - No money, wallets or financial actions are involved.
-- Free AI models on OpenRouter may retain prompts depending on the provider. For that reason the demo uses scripted conversations only, and real meetings should only be used with the consent of everyone present.
+- Free AI models on OpenRouter may retain prompts depending on the provider. For that reason the demo uses scripted conversations and test accounts only, and real meetings should only be used with the consent of everyone present.
 
 ## Architecture
 
@@ -70,9 +71,9 @@ Even G2 glasses (Even App WebView: Vite + plain JavaScript + Even Hub SDK)
         v
 Node.js / Express backend (Railway)
    |-- Groq Whisper (speech to text)
-   |-- OpenRouter (promise extraction as JSON)
+   |-- OpenRouter (promise extraction as JSON, duplicate comparison)
+   |-- Google Calendar API (read plans for the day, write deadline)
    |-- Notion API (task)
-   |-- Google Calendar API (deadline)
    |-- Gmail API (draft)
    '-- MongoDB Atlas (devices, pairing codes, encrypted Google tokens)
 ```
@@ -151,16 +152,18 @@ The Notion database needs three columns: `Name` (title), `Due` (date) and `For` 
 ```
 glasses/   Even G2 app (screens, gestures, microphone capture, cards)
 server/    Express backend
-  index.js     routes
-  stt.js       speech to text (Groq)
-  extract.js   promise extraction (OpenRouter)
-  notion.js    Notion tasks
-  google.js    Google OAuth, Calendar events, Gmail drafts
-  pairing.js   pairing codes and device linking
-  store.js     encrypted token storage
-  crypto.js    AES-256-GCM helpers
-  db.js        MongoDB connection
-  pages.js     pairing web pages
+  index.js           routes
+  stt.js             speech to text (Groq)
+  extract.js         promise extraction (OpenRouter)
+  calendar-match.js  compares a new promise with existing Calendar events
+                     (OpenRouter, with a local word-similarity fallback)
+  notion.js          Notion tasks
+  google.js          Google OAuth, reading and creating Calendar events, Gmail drafts
+  pairing.js         pairing codes and device linking
+  store.js           encrypted token storage
+  crypto.js          AES-256-GCM helpers
+  db.js              MongoDB connection
+  pages.js           pairing web pages
 ```
 
 ## API
@@ -169,6 +172,7 @@ server/    Express backend
 |---|---|
 | `GET /api/health` | Health check |
 | `POST /api/audio` | Raw PCM in, transcript and detected promises out |
+| `POST /api/cards/preview` | Reads Calendar events for the due date and flags possible duplicates before approval |
 | `POST /api/cards/approve` | Create Notion task, Calendar event and Gmail draft |
 | `POST /api/pair/start`, `GET /api/pair/status` | Pairing code for the glasses |
 | `GET /pair`, `GET /pair/connect` | Pairing page and Google sign-in |
@@ -179,6 +183,7 @@ server/    Express backend
 
 - Listening works only while the app is in the foreground ("meeting mode").
 - Notion uses one workspace integration set up by the developer; per-user Notion sign-in is not built.
+- Notion is write-only; the read step uses Google Calendar.
 - The free AI model is sometimes slow, so a card can take 10 to 20 seconds to appear.
 - Hosting uses a trial plan, so the backend may stop after the trial ends.
 - Tested with the simulator, not on physical glasses.
